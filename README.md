@@ -1,6 +1,5 @@
 # Limit Order Book Alpha Research & Market Microstructure Engine
 
-**Quant trader / quantitative researcher portfolio project — MVP v0.1**
 
 Research question: *Do causal order-book imbalance, order flow and liquidity features forecast short-horizon midprice moves, and can we monetize predictions after crossing the spread and paying fees?*
 
