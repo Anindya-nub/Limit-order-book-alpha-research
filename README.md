@@ -1,121 +1,139 @@
 # Limit Order Book Alpha Research & Market Microstructure Engine
 
+**Real market data workflow** for quantitative trading / HFT research. Based on the user's original code, with an official LOBSTER data downloader and real-data CLI. **No synthetic results are presented as alpha evidence.**
 
-Research question: *Do causal order-book imbalance, order flow and liquidity features forecast short-horizon midprice moves, and can we monetize predictions after crossing the spread and paying fees?*
+## Completed real-market run
 
-> **Status:** A runnable, tested research **starter**, not a validated profitable HFT strategy. Synthetic output is strictly for software tests. The one-day LOBSTER sample is only a demonstration, not enough for credible generalization or live execution claims.
+The package now includes the official **AAPL 10-level NASDAQ sample for 21 June 2012** in `data/raw/`, and completed results in `reports/aapl_full_session/`. All **400,391** event/snapshot pairs were used; there was no row cap and no synthetic data in this research run.
 
-## 1. Quick start
+- Model: logistic regression with train-only imputation/scaling and balanced class weights.
+- Split: chronological 60% / 20% / 20% within one day, with label-horizon purging and feature warmup.
+- Horizons: 10, 50 and 100 events; 10 shares per simulated trade; $0.003/share/side fees; earliest entry at the next event.
+- No missing top quotes, locked/crossed books, reversed timestamps or unordered depth were found. All 178,116 eligible visible-volume transitions matched.
+- Simulated net P&L was **negative at every horizon**. These are diagnostic results, not a profitable-strategy claim.
+- The data are historical, not a live feed; one date cannot establish cross-day generalisation.
 
-Python 3.10+ (Windows / macOS / Linux):
+| Horizon | Test accuracy | Majority baseline accuracy | Simulated net P&L |
+|---:|---:|---:|---:|
+| 10 events | 39.97% | 51.32% | $-4,449.02 |
+| 50 events | 53.73% | 45.38% | $-1,214.16 |
+| 100 events | 53.32% | 49.38% | $-608.50 |
+
+The majority baseline always predicts the most frequent **training** class. The horizons are separate experiments; do not add their P&Ls together.
+
+To reproduce the included run from the extracted project folder:
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q
+python -m lob_alpha run-real --data-dir data/raw --symbol AAPL --levels 10 --model logistic --out reports/aapl_full_session
+```
+
+`requirements-tested.txt` records the versions used. The reports include file fingerprints, configuration, package versions, confusion matrices, equity curves and trade logs. The download manifest records the official source URL and hashes. Synthetic generation remains available only for software tests.
+
+## What is already implemented
+
+- Official LOBSTER paired message + orderbook loader (NASDAQ samples, fixed-point prices to USD).
+- Causal microstructure features: top-of-book and five-level imbalance, order-flow imbalance, microprice deviation, trade/cancel pressure, spread, depth.
+- Three-class next-10/50/100-event midprice prediction with purged chronological splits, logistic and LightGBM models, and held-out diagnostic plots.
+- An **aggressive execution proxy** that enters at post-decision bid/ask with configurable event delay, exits after the chosen horizon, checks displayed liquidity and pays share-based fees.
+- Event-level smoke tests, price/depth sanity checks, and human-readable report exports.
+
+## Quick start (real NASDAQ market data)
+
+From the root of this project, using Python 3.10+:
 
 ```bash
 python -m venv .venv
-# On Windows PowerShell: .venv\Scripts\Activate.ps1
-# On macOS/Linux: source .venv/bin/activate
-pip install -e '.[dev,lightgbm]'
-pytest -q
-lob-alpha demo-data --out data --events 6000
-lob-alpha verify-demo --message data/synthetic_message.csv --book data/synthetic_orderbook.csv
-lob-alpha run --messages data/synthetic_message.csv --books data/synthetic_orderbook.csv --model logistic --out reports/demo
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+# macOS / Linux: source .venv/bin/activate
+python -m pip install -e ".[dev,lightgbm]"
+python -m pytest -q
 ```
 
-If PowerShell has quoting issues, use `pip install -e .` instead; LightGBM and pytest can be installed separately. The main output is `reports/demo/results.json` plus a trade log for each forecasting horizon.
+### Step 1: Obtain the official **real** AAPL dataset (already included)
 
-### Real NASDAQ data
+LOBSTER publishes a public full-day 10-level historical NASDAQ AAPL sample from **2012-06-21**. The data is derived from the official NASDAQ Historical TotalView-ITCH sample; it is **not synthetically generated**.
 
-Download an AAPL 10-level **message** + **orderbook** pair from [LOBSTER's official sample page](https://php.lobsterdata.com/info/DataSamples.php). Unzip the files into `data/`. Locate the pair (typically filenames containing `message` and `orderbook`). Then run:
+Try the built-in helper:
 
 ```bash
-lob-alpha run --messages data/YOUR_AAPL_message.csv --books data/YOUR_AAPL_orderbook.csv --model logistic --out reports/aapl
-lob-alpha run --messages data/YOUR_AAPL_message.csv --books data/YOUR_AAPL_orderbook.csv --model lightgbm --latency 5 --out reports/aapl_lgbm_latency5
+lob-alpha download-sample --symbol AAPL --levels 10 --out data/raw
 ```
 
-For meaningful out-of-sample tests, acquire *several distinct full trading days* and provide both lists in chronological order (one pair per session):
+If the server blocks scripted downloads, open the official source at https://php.lobsterdata.com/info/DataSamples.php and download the **Apple / AAPL / Level 10** ZIP yourself. Extract the matching **`*_message_10.csv` and `*_orderbook_10.csv`** files into `data/raw/`. This also works if you obtained your data through a licensed LOBSTER account. Please obey the provider's usage and redistribution terms.
+
+### Step 2: Run the research pipeline on real data
 
 ```bash
-lob-alpha run --messages data/day01_message.csv data/day02_message.csv data/day03_message.csv --books data/day01_orderbook.csv data/day02_orderbook.csv data/day03_orderbook.csv --out reports/multiday
+lob-alpha run-real --data-dir data/raw --symbol AAPL --levels 10 --model logistic --max-rows 100000 --out reports/aapl_first_run
 ```
 
-For >=3 sessions, model training/validation/test is split chronologically by **whole days**; otherwise it splits chronologically within the sample and emits a warning. Never interpret one-day test results as cross-day out-of-sample evidence.
+`--max-rows 100000` is a resource-friendly diagnostic; omit it for the full session (higher RAM). If one session's early period has low class diversity, use the full sample instead.
 
-## 2. What's included
-
-| File | Purpose |
-|---|---|
-| `data.py` | Official LOBSTER six-column messages and 4xN orderbook row loader; fixed-point prices → USD; basic checks |
-| `book.py` | Exact ID-based limit-order reconstruction from **complete** message streams; audit synthetic snapshots |
-| `synthetic.py` | Coherent reproducible L3 event and snapshot generator for smoke tests, never research evidence |
-| `features.py` | Causal OBI-1, OBI-5, OFI, microprice, pressure, depth, spread, rolling trade/cancel intensity |
-| `labels.py` | Three-way price movement labels at 10/50/100 event horizons; day-safe purged split |
-| `models.py` | Logistic and optional LightGBM; train-only preprocessing; balanced accuracy, F1, log loss, Brier, ECE |
-| `execution.py` | Nonoverlapping long/short marketable order proxy using actual bid/ask, fees, top-level depth, latency |
-| `pipeline.py` | End-to-end CLI orchestrator, experiment JSON and trade CSVs |
-| `tests/` | Deterministic tests for book replay, temporal causality, label purging, execution and integration |
-
-## 3. The signal research
-
-At event t, bid/ask prices are B_t and A_t, bid/ask available sizes are q^B_t and q^A_t.
-
-- **Mid:** (A_t+B_t)/2; **spread:** A_t - B_t.
-- **Queue imbalance:** OBI = (q^B - q^A) / (q^B + q^A).
-- **Microprice:** (A*q^B+B*q^A)/(q^B+q^A).
-- **OFI:** [1(B_t>=B_{t-1})q^B_t - 1(B_t<=B_{t-1})q^B_{t-1}] - [1(A_t<=A_{t-1})q^A_t - 1(A_t>=A_{t-1})q^A_{t-1}].
-- **Trade pressure:** sign of aggressor * executed quantity; a trade against a displayed sell order has positive buy-aggressor direction. 10/50 event rolling window.
-- **Cancel pressure:** cancellation at bid removes bid depth (negative); cancellation at ask removes ask depth (positive). 50-event rolling window.
-- **Targets:** sign(mid[t+h] - mid[t]) with neutral band of ±0.5 tick; horizons 10/50/100 events.
-
-All features are computed at and before t. All target horizons are future and purged at split/day boundaries. `lightgbm` is an optional extra, logistic requires only base dependencies.
-
-## 4. Execution interpretation
-
-- A feature is observed after event **t**. An order may execute at **t+1+latency_events** (never at event t's already-observed price). It exits after an additional h events.
-- Long opens at the *ask* and closes at the *bid*; short opens at the *bid* and covers at the *ask*.
-- Orders are rejected when top-of-book available size is below order size; explicit per-side share fees are included; trading never crosses the session boundary.
-- The strategy trades only when up or down predicted probability exceeds 0.40 and differs from the opposite direction by >=0.07. Thresholds are illustrative and **not** optimized on the test set.
-- One position at a time avoids overlapping trades. **Do not add overlapping per-event P&L to make a backtest look profitable.**
-- The backtest makes an *optimistic* execution assumption: sufficient displayed top-of-book shares can be fully traded at the observed quote. It excludes market impact, routing, adverse fill conditions, borrow costs, maker/taker differentiation, queue position, and real wall-clock latency. Hence its profitability is **not proof of a live-executable alpha**.
-
-## 5. Order-by-order reconstruction caveat
-
-LOBSTER samples are *level-truncated*: the accompanying message file may not contain all older resting orders, events outside the requested depth, or the complete history needed to recover the full order-id queue from empty state. Therefore:
-
-- **Use provided LOBSTER snapshot files as the ground truth** for features and forecasting.
-- **Do not** run `verify-demo` on a partial official sample and conclude the order-level engine is incorrect merely because unseen orders are missing.
-- `book.py` can exactly reconstruct an **entire ordered stream starting from empty**, demonstrated by `demo-data` and `verify-demo`.
-- A full order-level historical engine on NASDAQ ITCH should ingest the *entire feed from session initialization*, handle exchange-specific amendments/trade corrections, and verify exchange-consistent depths, queue ordering and time.
-
-Official description: [LOBSTER output schema](https://php.lobsterdata.com/info/DataStructure.php) and [reconstruction notes](https://php.lobsterdata.com/info/HowDoesItWork.php).
-
-## 6. Next research milestones (not implemented yet)
-
-1. **Microstructure evidence:** proper multi-day data; plots by time-of-day, imbalance deciles, spread regimes; event-time and clock-time horizons; economic statistical significance with dependent data.
-2. **Hyperparameter tuning:** train/validation-only model and threshold tuning, walk-forward across days and multiple tickers, embargo for correlated labels, calibration, bootstrapped uncertainty.
-3. **Passive fill engine:** price/time priority, queue-ahead volume, real order-ID order matching, cancellations ahead versus behind, adverse selection and maker/taker fees. Cannot accurately infer individual queue positions from aggregated top-10 snapshots.
-4. **DeepLOB:** CNN-LSTM or alternative sequence model with train-only normalized L2 order-book tensors; compare speed vs predictive benefit.
-5. **More realistic execution:** actual timestamp latency, impact, partial fills, quote lifetime, venue/multi-market fragmentation, short stock borrow, position/inventory constraints.
-6. **Research paper / dashboard:** ablations (OBI vs OFI, logistic vs LightGBM, event horizon, latency), calibration plots, performance and drawdown report.
-
-## 7. Recommended experiment matrix
-
-| Comparison | Hypothesis |
-|---|---|
-| OBI vs OFI | Event-delta flow could contain more information than static queue snapshot |
-| Logistic vs LightGBM | Nonlinear interactions help particularly when spread/depth regimes change |
-| 10 vs 50 vs 100 events | Signal information decays with horizon |
-| 0 vs 5 vs 20 extra events | Fill delay erodes short-lived predictive value |
-| Aggressive vs passive (future) | Price improvement competes with fill probability and adverse selection |
-
-**Portfolio claim only after collecting genuine cross-day test results.** Until then, say you *built a reproducible LOB alpha research and execution simulation framework*, not that you found profitable HFT alpha.
-
-### Additional comparison commands
+If LightGBM is installed:
 
 ```bash
-# OBI vs OFI using the same model and the same data horizon:
-lob-alpha run --messages data/YOUR_AAPL_message.csv --books data/YOUR_AAPL_orderbook.csv --features obi --horizons 50 --out reports/obi
-lob-alpha run --messages data/YOUR_AAPL_message.csv --books data/YOUR_AAPL_orderbook.csv --features ofi --horizons 50 --out reports/ofi
-# Sensitivity to extra event latency:
-lob-alpha run --messages data/YOUR_AAPL_message.csv --books data/YOUR_AAPL_orderbook.csv --latency 20 --out reports/latency20
+lob-alpha run-real --data-dir data/raw --symbol AAPL --model lightgbm --max-rows 100000 --latency 5 --out reports/aapl_lightgbm
 ```
 
-Each experiment also saves `summary.md`, held-out confusion-matrix PNGs, and cumulative net P&L PNGs (when trades occur). `snapshot_checks.visible_event_delta_check` compares same-price liquidity changes across adjacent official snapshots when the order price remains visible in both.
+Run OBI vs OFI ablations:
+
+```bash
+lob-alpha run-real --data-dir data/raw --symbol AAPL --features obi --horizons 50 --max-rows 100000 --out reports/obi
+lob-alpha run-real --data-dir data/raw --symbol AAPL --features ofi --horizons 50 --max-rows 100000 --out reports/ofi
+```
+
+Each run writes `results.json`, `summary.md`, and test-trade CSV and plots under `--out`. Inspect the held-out test accuracy, class support, Spearman IC, trade count, net P&L, and snapshot-integrity warnings.
+
+### Step 3: Acquire multiple independent trading sessions (required for research claims)
+
+The freely available LOBSTER stock samples are **different tickers on one calendar date**. They are NOT independent cross-day evidence. The built-in `run-real` command intentionally selects one symbol and discovers one data pair per session date.
+
+For a credible experiment, obtain at least **10 distinct days for the same symbol** where possible, placing each pair in `data/raw/` with LOBSTER's original names. The code sorts session dates and uses whole-day chronological train/validation/test splits when it sees >=3 days.
+
+```bash
+lob-alpha run-real --data-dir data/raw --symbol AAPL --model logistic --out reports/aapl_multiday
+```
+
+Buying additional historical days directly from LOBSTER may require an account/license. Alternatives such as FI-2010 (preprocessed five-stock/ten-day benchmark) and historical crypto L2 snapshots **are not drop-in compatible with the LOBSTER 6-column message schema**. They need independent data adapters and adjustments to execution modelling. Do not pretend they are identical.
+
+## How to interpret the analysis
+
+- **Prediction is not profit.** A 60% direction classifier can still lose money by crossing a wide spread.
+- **No future information at entry.** The backtester observes features through event `t`, then buys/sells no earlier than event `t+1+latency`.
+- **Event latency is not clock latency.** Ten events may represent dramatically different elapsed times across sessions and symbols.
+- **Execution is an optimistic approximation.** It assumes all specified shares trade at the displayed best bid/ask if size is sufficient, and excludes market impact, queue dynamics, routing, delayed/cancelled fills and borrow.
+- **Model selection is not a repeated test.** Keep final test days unseen while tuning features, horizons, parameters and execution thresholds on train/validation data. Run repeated rolling-origin experiments only within allowed train/validation history.
+- **Historical samples are old.** Results from June 2012 cannot be represented as current NASDAQ performance.
+
+## Structure
+
+```text
+src/lob_alpha/
+  real_data.py   # NEW: official sample downloader, manifests and deterministic session discovery
+  cli.py         # MODIFIED: download-sample and run-real commands
+  data.py        # LOBSTER data parsing and integrity checks
+  features.py    # causal microstructure features
+  labels.py      # three-class labels, purged chronological splitting
+  models.py      # logistic / LightGBM and metrics
+  execution.py   # aggressive bid/ask backtest with explicit latency and fees
+  pipeline.py    # end-to-end run, diagnostics and experiment results
+  book.py        # L3 order-ID engine for complete streams only
+  synthetic.py   # synthetic generator for software unit tests ONLY
+  visuals.py     # visual reports
+tests/            # unit/integration tests
+data/raw/         # official public sample for local use; observe provider terms
+reports/          # generated outputs
+```
+
+## Research next steps
+
+1. Run real full-day AAPL and inspect snapshot quality, base rates and midprice tick behaviour.
+2. Acquire multiple historical sessions for robust out-of-sample testing.
+3. Add session-by-session performance and block-bootstrap confidence intervals for IC and net profit.
+4. Compare OBI, OFI and trade-flow features under varying event horizons and execution latency.
+5. Replace optimistic aggressive fills with more conservative sensitivity assumptions (spread shocks / delayed fills) before making economic claims.
+6. Consider true L3 queue-aware simulation only when a full order-ID feed is available.
+
+**Portfolio wording today:** "Built a reproducible historical limit order book alpha research framework using NASDAQ event and depth data, leak-aware classification and an explicit-spread execution backtester." Add numeric performance only once genuine multi-day experiments have been executed and validated.
